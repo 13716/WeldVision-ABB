@@ -1,0 +1,36 @@
+# config.yaml
+
+# Chế độ hoạt động: fixed (camera cố định) hoặc eye-in-hand (gắn trên robot)
+mode: fixed
+
+# Các tham số vùng ROI (Region of Interest) trên ảnh
+roi_top: 0.2
+roi_bottom: 0.8
+roi_left: 0.4
+
+# Ngưỡng cho Canny Edge Detector
+canny_low: 50
+canny_high: 150
+
+# Tham số cho Hough Line Transform
+hough_thresh: 50
+min_line_length: 50
+max_line_gap: 20
+
+# Tham số cho DBSCAN
+dbscan_eps: 30
+dbscan_min_samples: 3
+
+# Zigzag path
+zigzag_step: 5
+zigzag_amp: 2
+zigzag_z: 10
+
+# Số frame tối đa để thử phát hiện
+max_frames: 100
+# File chứa thông số nội tại của camera (numpy .npz)
+camera_params_file: camera_params.npz
+#socket connect 
+host: 127.0.0.1
+port: 5000
+

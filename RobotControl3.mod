@@ -3,193 +3,168 @@ MODULE RobotControl
     VAR string received_data;
     VAR num coords{3};
     VAR robtarget target_pos;
-    VAR num weld_path{100, 3};  ! M?ng luu t?a d? du?ng hàn (t?i da 100 di?m, m?i di?m có [x, y, z])
-    VAR num path_length := 0;   ! S? lu?ng di?m trong c?m du?ng hàn hi?n t?i
-    PERS tooldata my_tool := [TRUE,[[0,0,0],[1,0,0,0]],[2,[0,0,10],[1,0,0,0],0.1,0.1,0.1]];
+    VAR num weld_path{100, 3};
+    VAR num path_length := 0;
     PERS wobjdata my_wobj := [FALSE,TRUE,"",[[0,0,0],[1,0,0,0]],[[0,0,0],[1,0,0,0]]];
     CONST robtarget home_pos := [[506.29,10,679.5],[0.514,0,0.857,0],[1,0,0,0],[0,0,0,0,0,0]];
     VAR bool move_success := TRUE;
     PERS bool GripperClosed := FALSE;
     CONST robtarget mid_pos:=[[350,300,800],[0.514,0,0.857,0],[1,0,0,0],[0,0,0,0,0,0]];
-
+    PERS tooldata my_tool:=[TRUE,[[0,0,0],[1,0,0,0]],[2,[0,0,10],[1,0,0,0],0.1,0.1,0.1]];
+    PERS tooldata Weldgun:=[TRUE,[[20.31,0,363.689],[1,0,0,0]],[1,[0,0,10],[1,0,0,0],0.1,0.1,0.1]];
     PROC Main()
         VAR bool keep_running := TRUE;
         VAR num i;
-        
+        CONST num WAIT_TIMEOUT := 15;
+
         ConfL \Off;
         ConfJ \On;
-        MoveJ home_pos, v50, fine, my_tool \WObj:=my_wobj;
-        TPWrite "Dã di chuy?n d?n v? trí Home";
+        MoveJ home_pos,v100,fine,my_tool\WObj:=my_wobj;
+        TPWrite " Di chuyen den vi tri Home";
 
         SocketCreate client_socket;
-        TPWrite "K?t n?i d?n server Python t?i 127.0.0.1:5000";
         SocketConnect client_socket, "127.0.0.1", 5000;
-        TPWrite "Dã k?t n?i d?n server";
+        TPWrite " Ket noi thanh cong voi server Python";
 
-      WHILE keep_running DO
-            ! G?i yêu c?u c?m du?ng hàn m?i
-            TPWrite "G?i READY_FOR_NEW_PATH";
+        WHILE keep_running DO
             SocketSend client_socket, \Str:="READY_FOR_NEW_PATH";
-            
-            ! Nh?n d? li?u du?ng hàn ho?c tín hi?u DONE
-            TPWrite "Dang ch? d? li?u du?ng hàn...";
-            SocketReceive client_socket, \Str:=received_data \Time:=WAIT_MAX;
-            IF SocketGetStatus(client_socket) <> SOCKET_CONNECTED THEN
-                TPWrite "L?i: Server dã ng?t k?t n?i";
+            TPWrite " Dang cho phan hoi tu server...";
+
+            received_data := "";
+            SocketReceive client_socket, \Str:=received_data \Time:=WAIT_TIMEOUT;
+
+            IF StrLen(TrimString(received_data)) = 0 THEN
+                TPWrite " Timeout. Khong nhan duoc du lieu tu server.";
+                MoveJ mid_pos,v100,z5,my_tool\WObj:=my_wobj;
+                SocketClose client_socket;
                 keep_running := FALSE;
                 EXIT;
             ENDIF
-            TPWrite "Nh?n du?c: '" + received_data + "'";
 
-            ! Ki?m tra tín hi?u DONE
-            IF received_data = "DONE" THEN
-                TPWrite "Nh?n DONE, quá trình hàn hoàn t?t";
-                 ! Quay v? v? trí Home và k?t thúc
-                MoveJ home_pos, v100, fine, my_tool \WObj:=my_wobj;
-                TPWrite "Quay v? v? trí Home";
+            IF SocketGetStatus(client_socket) <> SOCKET_CONNECTED THEN
+                TPWrite " Server ngat ket noi.";
                 SocketClose client_socket;
-                TPWrite "Dóng k?t n?i client";
                 keep_running := FALSE;
                 EXIT;
             ENDIF
 
             received_data := TrimString(received_data);
-            TPWrite "Sau khi c?t g?n: '" + received_data + "'";
+            TPWrite " Nhan duoc: '" + received_data + "'";
 
-            IF StrLen(received_data) = 0 THEN
-                TPWrite "L?i: D? li?u r?ng sau khi c?t g?n";
-                SocketSend client_socket, \Str:="ERROR: Empty data";
+            IF received_data = "DONE" THEN
+                TPWrite " Server bao hoan thanh tat ca batch.";
+                MoveJ home_pos, v100,fine,my_tool\WObj:=my_wobj;
+                SocketClose client_socket;
+                keep_running := FALSE;
                 EXIT;
-            ELSEIF ParseWeldPath(received_data) THEN
-                TPWrite "Nh?n du?c c?m du?ng hàn v?i " + NumToStr(path_length, 0) + " di?m";
+            ENDIF
+
+            IF ParseWeldPath(received_data) THEN
                 FOR i FROM 1 TO path_length DO
-                    coords{1} := weld_path{i, 1};
-                    coords{2} := weld_path{i, 2};
-                    coords{3} := weld_path{i, 3};
-                    IF BuildRobTarget() THEN
-                        TPWrite "Di chuy?n d?n di?m hàn " + NumToStr(i, 0) + ": " + NumToStr(coords{1}, 1) + "," + NumToStr(coords{2}, 1) + "," + NumToStr(coords{3}, 1);
-                        move_success := TRUE;
-                        SetGripper(TRUE);  ! Kích ho?t công c? hàn
-                        WaitTime 0.5;
-                        MoveL target_pos, v100, z10, my_tool \WObj:=my_wobj;
-                        WaitTime 0.5;  ! Mô ph?ng th?i gian hàn
-                        SetGripper(FALSE);  ! T?t công c? hàn
-                        IF NOT move_success THEN
-                            TPWrite "L?i: MoveL th?t b?i t?i di?m " + NumToStr(i, 0);
-                            SocketSend client_socket, \Str:="ERROR: MoveL failed at point " + NumToStr(i, 0);
-                            EXIT;
-                        ENDIF
+                    coords{1} := weld_path{i,1};
+                    coords{2} := weld_path{i,2};
+                    coords{3} := weld_path{i,3};
+
+                    IF BuildRobTarget(i)  THEN
+                        TPWrite " Diem " + NumToStr(i,0) + ": " + NumToStr(coords{1},1) + ", " + NumToStr(coords{2},1) + ", " + NumToStr(coords{3},1);
+                        SetGripper(TRUE);
+                        MoveL target_pos,v100,z5,my_tool\WObj:=my_wobj;
+                        SetGripper(FALSE);
                     ELSE
-                        TPWrite "L?i: BuildRobTarget th?t b?i t?i di?m " + NumToStr(i, 0);
-                        SocketSend client_socket, \Str:="ERROR: Coordinates out of reach at point " + NumToStr(i, 0);
+                        TPWrite " Loi: toa do khong hop le tai diem " + NumToStr(i, 0);
+                        SocketSend client_socket, \Str:="ERROR: Coordinates out of range";
                         EXIT;
                     ENDIF
                 ENDFOR
-                TPWrite "Hoàn thành c?m du?ng hàn";
             ELSE
-                TPWrite "L?i: D?nh d?ng không h?p l? trong ParseWeldPath";
-                SocketSend client_socket, \Str:="ERROR: Invalid weld path format";
+                TPWrite " Loi: ParseWeldPath that bai";
+                SocketSend client_socket, \Str:="ERROR: Invalid path format";
                 EXIT;
             ENDIF
         ENDWHILE
-        
-
-        
-    ERROR
-        TPWrite "L?I: G?p ngo?i l? trong Main";
-        TPWrite "Mã l?i: " + NumToStr(ERRNO, 0);
-        IF ERRNO = ERR_SOCK_CLOSED THEN
-            TPWrite "Socket dóng b?t ng?";
-            SocketClose client_socket;
-            RETRY;
-        ELSE
-            TPWrite "L?I: Thao tác th?t b?i v?i ERRNO: " + NumToStr(ERRNO, 0);
-            SocketSend client_socket, \Str:="ERROR: Operation failed with ERRNO: " + NumToStr(ERRNO, 0);
-            move_success := FALSE;
-            RETRY;
-        ENDIF
     ENDPROC
 
     PROC SetGripper(BOOL closed)
         GripperClosed := closed;
         IF closed THEN
-            TPWrite "Kích ho?t công c? hàn";
+            TPWrite " Gripper dong";
         ELSE
-            TPWrite "T?t công c? hàn";
+            TPWrite " Gripper mo";
         ENDIF
     ENDPROC
 
+  FUNC bool BuildRobTarget(num i)
+        VAR num dx; 
+        VAR num dy;
+        VAR num angle_deg; 
+        VAR num distance;
+        VAR orient tool_orient;
+        distance := Sqrt(coords{1}*coords{1} + coords{2}*coords{2} + coords{3}*coords{3});
+        IF Abs(coords{1}) > 700 OR Abs(coords{2}) > 700 OR coords{3} > 900 OR coords{3} < -200 THEN
+            RETURN FALSE;
+        ENDIF
+        IF distance > 810 THEN
+            RETURN FALSE;
+        ENDIF
+
+        IF i < path_length THEN
+            dx := weld_path{i+1,1} - weld_path{i,1};
+            dy := weld_path{i+1,2} - weld_path{i,2};
+        ELSEIF i > 1 THEN
+            dx := weld_path{i,1} - weld_path{i-1,1};
+            dy := weld_path{i,2} - weld_path{i-1,2};
+        ELSE
+            dx := 1;
+            dy := 0;
+        ENDIF
+
+        angle_deg := ATan2(dy, dx) * 180 / 3.1415926;
+        IF angle_deg >170 THEN
+        angle_deg :=180;
+        tool_orient := OrientZYX(-180,23, angle_deg);
+        ELSE 
+        angle_deg :=-180;
+        tool_orient := OrientZYX(-180,23, angle_deg);  
+        ENDIF
+        target_pos := [[coords{1}, coords{2}, coords{3}], tool_orient, [1,0,0,0], [0,0,0,0,0,0]];
+        RETURN TRUE;
+    ENDFUNC
+
     FUNC string TrimString(string str)
         VAR num start := 1;
-        VAR num last;
-        VAR string ch;
-        VAR bool found_non_space := FALSE;
-        
+        VAR num last ;
         last := StrLen(str);
-        
-        IF last = 0 THEN
-            RETURN "";
-        ENDIF
-        
-        WHILE start <= last AND found_non_space = FALSE DO
-            ch := StrPart(str, start, 1);
-            IF (ch = " ") OR (ch = "\0D") OR (ch = "\0A") OR (ch = "\09") THEN
-                start := start + 1;
-            ELSE
-                found_non_space := TRUE;
-            ENDIF
+        WHILE start <= last AND StrPart(str, start, 1) = " " DO
+            start := start + 1;
         ENDWHILE
-        
-        IF start > last THEN
-            RETURN "";
-        ENDIF
-        
-        found_non_space := FALSE;
-        WHILE last >= start AND found_non_space = FALSE DO
-            ch := StrPart(str, last, 1);
-            IF (ch = " ") OR (ch = "\0D") OR (ch = "\0A") OR (ch = "\09") THEN
-                last := last - 1;
-            ELSE
-                found_non_space := TRUE;
-            ENDIF
+        WHILE last >= start AND StrPart(str, last, 1) = " " DO
+            last := last - 1;
         ENDWHILE
-        
-        IF last < start THEN
-            RETURN "";
-        ENDIF
-        
         RETURN StrPart(str, start, last - start + 1);
-        
-    ERROR
-        TPWrite "L?I trong TrimString: G?p ngo?i l?";
-        RETURN "";
     ENDFUNC
 
     FUNC bool ParseWeldPath(string data)
         VAR num i;
-        VAR num j;
-        VAR string point_str;
+        VAR num j; 
         VAR num start_pos := 1;
-        VAR num end_pos;
+        VAR num end_pos; 
         VAR num point_count := 0;
+        VAR string point_str;
         VAR string temp_str;
         VAR num comma_pos;
-        
-        ! D?m s? di?m (m?i di?m phân tách b?ng d?u ch?m ph?y)
+
         FOR i FROM 1 TO StrLen(data) DO
             IF StrPart(data, i, 1) = ";" THEN
                 point_count := point_count + 1;
             ENDIF
         ENDFOR
         IF StrLen(data) > 0 AND StrPart(data, StrLen(data), 1) <> ";" THEN
-            point_count := point_count + 1;  ! Tính di?m cu?i n?u không có d?u ch?m ph?y ? cu?i
+            point_count := point_count + 1;
         ENDIF
-        
         IF point_count > 100 THEN
-            TPWrite "L?i: Quá nhi?u di?m trong du?ng hàn (t?i da 100)";
             RETURN FALSE;
         ENDIF
-        
+
         path_length := 0;
         FOR i FROM 1 TO point_count DO
             end_pos := StrFind(data, start_pos, ";");
@@ -199,12 +174,10 @@ MODULE RobotControl
                 point_str := StrPart(data, start_pos, end_pos - start_pos);
                 start_pos := end_pos + 1;
             ENDIF
-            
-            ! Phân tích t?a d? [x,y,z] trong point_str
+
             FOR j FROM 1 TO 3 DO
                 comma_pos := StrFind(point_str, 1, ",");
                 IF comma_pos = -1 AND j < 3 THEN
-                    TPWrite "L?i: Thi?u d?u ph?y trong di?m " + NumToStr(i, 0);
                     RETURN FALSE;
                 ENDIF
                 IF j < 3 THEN
@@ -213,43 +186,13 @@ MODULE RobotControl
                 ELSE
                     temp_str := point_str;
                 ENDIF
-                
-                IF StrLen(temp_str) = 0 THEN
-                    TPWrite "L?i: T?a d? r?ng trong di?m " + NumToStr(i, 0);
-                    RETURN FALSE;
-                ENDIF
-                
-                IF NOT StrToVal(temp_str, weld_path{i, j}) THEN
-                    TPWrite "L?i: S? không h?p l? trong di?m " + NumToStr(i, 0) + ": '" + temp_str + "'";
+                IF NOT StrToVal(temp_str, weld_path{i,j}) THEN
                     RETURN FALSE;
                 ENDIF
             ENDFOR
             path_length := path_length + 1;
         ENDFOR
-        
-        TPWrite "Dã phân tích du?ng hàn v?i " + NumToStr(path_length, 0) + " di?m";
         RETURN TRUE;
     ENDFUNC
 
-    FUNC bool BuildRobTarget()
-        VAR num distance;
-        distance := Sqrt(coords{1}*coords{1} + coords{2}*coords{2} + coords{3}*coords{3});
-        
-        IF Abs(coords{1}) > 700 OR Abs(coords{2}) > 700 OR coords{3} > 900 OR coords{3} < -200 THEN
-            TPWrite "L?i: T?a d? ngoài không gian làm vi?c (x:±700, y:±700, z:-200 d?n 900)";
-            RETURN FALSE;
-        ENDIF
-        
-        IF distance > 810 THEN
-            TPWrite "L?i: T?a d? ngoài t?m v?i c?a IRB140: " + NumToStr(distance, 1) + " mm";
-            RETURN FALSE;
-        ENDIF
-        
-        target_pos := [[coords{1}, coords{2}, coords{3}], [0.514, 0, 0.857, 0], [1, 0, 0, 0], [0, 0, 0, 0, 0, 0]];
-        RETURN TRUE;
-        
-    ERROR
-        TPWrite "L?I trong BuildRobTarget: " + NumToStr(ERRNO, 0);
-        RETURN FALSE;
-    ENDFUNC
 ENDMODULE
